@@ -151,7 +151,7 @@
 #ifdef NO_GRAPHICS
 #define SDL_KEYBOARD_DRIVER KEYBOARD_DRIVER
 #else
-#define SDL_KEYBOARD_DRIVER sdl_window ? (sdlKeyDriver() ? pc_interrupt(7) : 0) : (KEYBOARD_DRIVER)
+#define SDL_KEYBOARD_DRIVER sdl_window ? (sdlKeyDriver() && pc_interrupt(7)) : (KEYBOARD_DRIVER)
 #endif
 
 // Global variable definitions
@@ -171,108 +171,114 @@ SDL_Event sdl_event;
 unsigned int rawPixels[720 * 350];
 unsigned short vid_addr_lookup[VIDEO_RAM_SIZE], cga_colors[4] = {0 /* Black */, 0x1F1F /* Cyan */, 0xE3E3 /* Magenta */, 0xFFFF /* White */};
 
-unsigned int KeysymToCode(unsigned int sym)
+// Convert SDL2 keycodes to SDL1
+int KeysymToCode(int sym, int numlock)
 {
+	// 0x40000039 = SDLK_CAPSLOCK     -> 301
+	//
+	// 0x4000003A = SDLK_F1           -> 282
+	// 0x4000003B = SDLK_F2           -> 283
+	// 0x4000003C = SDLK_F3           -> 284
+	// 0x4000003D = SDLK_F4           -> 285
+	// 0x4000003E = SDLK_F5           -> 286
+	// 0x4000003F = SDLK_F6           -> 287
+	// 0x40000040 = SDLK_F7           -> 288
+	// 0x40000041 = SDLK_F8           -> 289
+	// 0x40000042 = SDLK_F9           -> 290
+	// 0x40000043 = SDLK_F10          -> 291
+	// 0x40000044 = SDLK_F11          -> 292
+	// 0x40000045 = SDLK_F12          -> 293
+	//
+	// 0x40000046 = SDLK_PRINTSCREEN  -> 316
+	// 0x40000047 = SDLK_SCROLLLOCK   -> 302
+	// 0x40000048 = SDLK_PAUSE        ->  19
+	// 0x40000049 = SDLK_INSERT       -> 277
+	// 0x4000004A = SDLK_HOME         -> 278
+	// 0x4000004B = SDLK_PAGEUP       -> 280
+	// 0x4000004C = ???
+	// 0x4000004D = SDLK_END          -> 279
+	// 0x4000004E = SDLK_PAGEDOWN     -> 281
+	// 0x4000004F = SDLK_RIGHT        -> 275
+	// 0x40000050 = SDLK_LEFT         -> 276
+	// 0x40000051 = SDLK_DOWN         -> 274
+	// 0x40000052 = SDLK_UP           -> 273
+	// 0x40000053 = SDLK_NUMLOCKCLEAR -> 300
+	//
+	// 0x40000054 = SDLK_KP_DIVIDE    -> '/'
+	// 0x40000055 = SDLK_KP_MULTIPLY  -> '*'
+	// 0x40000056 = SDLK_KP_MINUS     -> '-'
+	// 0x40000057 = SDLK_KP_PLUS      -> '+'
+	// 0x40000058 = SDLK_KP_ENTER     -> '\n'
+	// 0x40000059 = SDLK_KP_1         -> '1' or 279
+	// 0x4000005A = SDLK_KP_2         -> '2' or 274
+	// 0x4000005B = SDLK_KP_3         -> '3' or 281
+	// 0x4000005C = SDLK_KP_4         -> '4' or 276
+	// 0x4000005D = SDLK_KP_5         -> '5' or 0
+	// 0x4000005E = SDLK_KP_6         -> '6' or 275
+	// 0x4000005F = SDLK_KP_7         -> '7' or 278
+	// 0x40000060 = SDLK_KP_8         -> '8' or 273
+	// 0x40000061 = SDLK_KP_9         -> '9' or 280
+	// 0x40000062 = SDLK_KP_0         -> '0' or 277
+	// 0x40000063 = SDLK_KP_PERIOD    -> '.' or 127
+
+	// ...
+	// 0x400000E0 = SDLK_LCTRL        -> 306
+	// 0x400000E1 = SDLK_LSHIFT       -> 304
+	// 0x400000E2 = SDLK_LALT         -> 308
+	// 0x400000E3 = SDLK_LGUI         -> ???
+	// 0x400000E4 = SDLK_RCTRL        -> 305
+	// 0x400000E5 = SDLK_RSHIFT       -> 303
+	// 0x400000E6 = SDLK_RALT         -> 307
+	// 0x400000E7 = SDLK_RGUI         -> ???
+	int keylut[]  = {316, 302, 19, 277, 278, 280, 0, 279, 281, 275, 276, 274, 273, 300};
+	int keylut2[] = {306, 304, 308, 0, 305, 303, 307, 0};
+	int keylut3[] = {'/', '*', '-', '+', '\n', 279, 274, 281, 276, 0, 275, 278, 273, 280, 277, 127};
+
 	if (!(sym & (1 << 30)))
 		return sym;
 
-	switch (sym)
-	{
-	case SDLK_KP_0:
-		return '0';
-	case SDLK_KP_1:
-		return '1';
-	case SDLK_KP_2:
-		return '2';
-	case SDLK_KP_3:
-		return '3';
-	case SDLK_KP_4:
-		return '4';
-	case SDLK_KP_5:
-		return '5';
-	case SDLK_KP_6:
-		return '6';
-	case SDLK_KP_7:
-		return '7';
-	case SDLK_KP_8:
-		return '8';
-	case SDLK_KP_9:
-		return '9';
-	case SDLK_KP_PERIOD:
-		return '.';
-	case SDLK_KP_DIVIDE:
-		return '/';
-	case SDLK_KP_MULTIPLY:
-		return '*';
-	case SDLK_KP_MINUS:
-		return '-';
-	case SDLK_KP_PLUS:
-		return '+';
-	case SDLK_KP_ENTER:
-		return '\n';
-	case SDLK_KP_EQUALS:
-		return '=';
-	case SDLK_UP:
-		return 273;
-	case SDLK_DOWN:
-		return 274;
-	case SDLK_RIGHT:
-		return 275;
-	case SDLK_LEFT:
-		return 276;
-	case SDLK_INSERT:
-		return 277;
-	case SDLK_HOME:
-		return 278;
-	case SDLK_END:
-		return 279;
-	case SDLK_PAGEDOWN:
-		return 281;
-	case SDLK_PAGEUP:
-		return 280;
-	case SDLK_NUMLOCKCLEAR:
-		return 300;
-	case SDLK_CAPSLOCK:
+	if (sym == SDLK_CAPSLOCK)
 		return 301;
-	case SDLK_SCROLLLOCK:
-		return 302;
-	case SDLK_RSHIFT:
-		return 303;
-	case SDLK_LSHIFT:
-		return 304;
-	case SDLK_RCTRL:
-		return 305;
-	case SDLK_LCTRL:
-		return 306;
-	case SDLK_RALT:
-		return 307;
-	case SDLK_LALT:
-		return 308;
-	default:
-		break;
-	}
+
+	if (sym >= SDLK_F1 && sym <= SDLK_F12)
+		return sym - SDLK_F1 + 282;
+
+	if (sym >= SDLK_PRINTSCREEN && sym <= SDLK_NUMLOCKCLEAR)
+		return keylut[sym - SDLK_PRINTSCREEN];
+
+	if (sym >= SDLK_KP_DIVIDE && sym <= SDLK_KP_PERIOD)
+		if (numlock)
+			return "/*-+\n1234567890."[sym - SDLK_KP_DIVIDE];
+		else
+			return keylut3[sym - SDLK_KP_DIVIDE];
+
+	if (sym == SDLK_KP_EQUALS)
+		return '=';
+
+	if (sym >= SDLK_LCTRL && sym <= SDLK_RGUI)
+		return keylut2[sym - SDLK_LCTRL];
+
 	return 0;
 }
 
-unsigned int sdlKeyDriver()
+int sdlKeyDriver()
 {
-	unsigned int mod;
 	static short keyBuffer[32];
 	static int keyIn = 0, keyOut = 0;
 
 	while (((keyIn + 1) & 31) != keyOut && SDL_PollEvent(&sdl_event))
 	{
+		int mod = sdl_event.key.keysym.mod;
+
 		if (!(sdl_event.type == SDL_KEYDOWN || sdl_event.type == SDL_KEYUP))
 			continue;
-
-		mod = sdl_event.key.keysym.mod;
 
 		keyBuffer[keyIn++] = 0x400
 			+ 0x800 * !!(mod & KMOD_ALT)
 			+ 0x1000 * !!(mod & KMOD_SHIFT)
 			+ 0x2000 * !!(mod & KMOD_CTRL)
 			+ 0x4000 * (sdl_event.type == SDL_KEYUP)
-			+ KeysymToCode(sdl_event.key.keysym.sym);
+			+ KeysymToCode(sdl_event.key.keysym.sym, mod & KMOD_NUM);
 
 		keyIn &= 31;
 	}
