@@ -151,7 +151,7 @@
 #ifdef NO_GRAPHICS
 #define SDL_KEYBOARD_DRIVER KEYBOARD_DRIVER
 #else
-#define SDL_KEYBOARD_DRIVER sdl_screen ? SDL_PollEvent(&sdl_event) && (sdl_event.type == SDL_KEYDOWN || sdl_event.type == SDL_KEYUP) && (scratch_uint = sdl_event.key.keysym.unicode, scratch2_uint = sdl_event.key.keysym.mod, CAST(short)mem[0x4A6] = 0x400 + 0x800*!!(scratch2_uint & KMOD_ALT) + 0x1000*!!(scratch2_uint & KMOD_SHIFT) + 0x2000*!!(scratch2_uint & KMOD_CTRL) + 0x4000*(sdl_event.type == SDL_KEYUP) + ((!scratch_uint || scratch_uint > 0x7F) ? sdl_event.key.keysym.sym : scratch_uint), pc_interrupt(7)) : (KEYBOARD_DRIVER)
+#define SDL_KEYBOARD_DRIVER sdl_window ? (sdlKeyDriver() ? pc_interrupt(7) : 0) : (KEYBOARD_DRIVER)
 #endif
 
 // Global variable definitions
@@ -164,9 +164,128 @@ struct timeb ms_clock;
 
 #ifndef NO_GRAPHICS
 SDL_AudioSpec sdl_audio = {44100, AUDIO_U8, 1, 0, 128};
-SDL_Surface *sdl_screen;
+SDL_Window *sdl_window;
+SDL_Renderer *sdl_renderer;
+SDL_Texture *sdl_texture;
 SDL_Event sdl_event;
+unsigned int rawPixels[720 * 350];
 unsigned short vid_addr_lookup[VIDEO_RAM_SIZE], cga_colors[4] = {0 /* Black */, 0x1F1F /* Cyan */, 0xE3E3 /* Magenta */, 0xFFFF /* White */};
+
+unsigned int KeysymToCode(unsigned int sym)
+{
+	if (!(sym & (1 << 30)))
+		return sym;
+
+	switch (sym)
+	{
+	case SDLK_KP_0:
+		return '0';
+	case SDLK_KP_1:
+		return '1';
+	case SDLK_KP_2:
+		return '2';
+	case SDLK_KP_3:
+		return '3';
+	case SDLK_KP_4:
+		return '4';
+	case SDLK_KP_5:
+		return '5';
+	case SDLK_KP_6:
+		return '6';
+	case SDLK_KP_7:
+		return '7';
+	case SDLK_KP_8:
+		return '8';
+	case SDLK_KP_9:
+		return '9';
+	case SDLK_KP_PERIOD:
+		return '.';
+	case SDLK_KP_DIVIDE:
+		return '/';
+	case SDLK_KP_MULTIPLY:
+		return '*';
+	case SDLK_KP_MINUS:
+		return '-';
+	case SDLK_KP_PLUS:
+		return '+';
+	case SDLK_KP_ENTER:
+		return '\n';
+	case SDLK_KP_EQUALS:
+		return '=';
+	case SDLK_UP:
+		return 273;
+	case SDLK_DOWN:
+		return 274;
+	case SDLK_RIGHT:
+		return 275;
+	case SDLK_LEFT:
+		return 276;
+	case SDLK_INSERT:
+		return 277;
+	case SDLK_HOME:
+		return 278;
+	case SDLK_END:
+		return 279;
+	case SDLK_PAGEDOWN:
+		return 281;
+	case SDLK_PAGEUP:
+		return 280;
+	case SDLK_NUMLOCKCLEAR:
+		return 300;
+	case SDLK_CAPSLOCK:
+		return 301;
+	case SDLK_SCROLLLOCK:
+		return 302;
+	case SDLK_RSHIFT:
+		return 303;
+	case SDLK_LSHIFT:
+		return 304;
+	case SDLK_RCTRL:
+		return 305;
+	case SDLK_LCTRL:
+		return 306;
+	case SDLK_RALT:
+		return 307;
+	case SDLK_LALT:
+		return 308;
+	default:
+		break;
+	}
+	return 0;
+}
+
+unsigned int sdlKeyDriver()
+{
+	unsigned int mod;
+	static short keyBuffer[32];
+	static int keyIn = 0, keyOut = 0;
+
+	while (((keyIn + 1) & 31) != keyOut && SDL_PollEvent(&sdl_event))
+	{
+		if (!(sdl_event.type == SDL_KEYDOWN || sdl_event.type == SDL_KEYUP))
+			continue;
+
+		mod = sdl_event.key.keysym.mod;
+
+		keyBuffer[keyIn++] = 0x400
+			+ 0x800 * !!(mod & KMOD_ALT)
+			+ 0x1000 * !!(mod & KMOD_SHIFT)
+			+ 0x2000 * !!(mod & KMOD_CTRL)
+			+ 0x4000 * (sdl_event.type == SDL_KEYUP)
+			+ KeysymToCode(sdl_event.key.keysym.sym);
+
+		keyIn &= 31;
+	}
+
+	if (keyIn != keyOut)
+	{
+		CAST(short)mem[0x4A6] = keyBuffer[keyOut++];
+		keyOut &= 31;
+		return 1;
+	}
+
+	return 0;
+}
 #endif
 
 // Helper functions
@@ -709,7 +828,7 @@ int main(int argc, char **argv)
 			if (io_ports[0x3B8] & 2)
 			{
 				// If we don't already have an SDL window open, set it up and compute color and video memory translation tables
-				if (!sdl_screen)
+				if (!sdl_window)
 				{
 					for (int i = 0; i < 16; i++)
 						pixel_colors[i] = mem[0x4AC] ? // CGA?
@@ -720,22 +839,23 @@ int main(int argc, char **argv)
 						vid_addr_lookup[i] = i / GRAPHICS_X * (GRAPHICS_X / 8) + (i / 2) % (GRAPHICS_X / 8) + 0x2000*(mem[0x4AC] ? (2 * i / GRAPHICS_X) % 2 : (4 * i / GRAPHICS_X) % 4);
 
 					SDL_Init(SDL_INIT_VIDEO);
-					sdl_screen = SDL_SetVideoMode(GRAPHICS_X, GRAPHICS_Y, 8, 0);
-					SDL_EnableUNICODE(1);
-					SDL_EnableKeyRepeat(500, 30);
+					sdl_window = SDL_CreateWindow("8086tiny minus", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, GRAPHICS_X, GRAPHICS_Y, 0);
+					sdl_renderer = SDL_CreateRenderer(sdl_window, -1, 0);
+					sdl_texture = SDL_CreateTexture(sdl_renderer, SDL_PIXELFORMAT_RGB332, SDL_TEXTUREACCESS_STREAMING, GRAPHICS_X, GRAPHICS_Y);
 				}
 
 				// Refresh SDL display from emulated graphics card video RAM
 				vid_mem_base = mem + 0xB0000 + 0x8000*(mem[0x4AC] ? 1 : io_ports[0x3B8] >> 7); // B800:0 for CGA/Hercules bank 2, B000:0 for Hercules bank 1
 				for (int i = 0; i < GRAPHICS_X * GRAPHICS_Y / 4; i++)
-					((unsigned *)sdl_screen->pixels)[i] = pixel_colors[15 & (vid_mem_base[vid_addr_lookup[i]] >> 4*!(i & 1))];
-
-				SDL_Flip(sdl_screen);
+					rawPixels[i] = pixel_colors[15 & (vid_mem_base[vid_addr_lookup[i]] >> 4 * !(i & 1))];
+				SDL_UpdateTexture(sdl_texture, NULL, rawPixels, GRAPHICS_X);
+				SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
+				SDL_RenderPresent(sdl_renderer);
 			}
-			else if (sdl_screen) // Application has gone back to text mode, so close the SDL window
+			else if (sdl_window) // Application has gone back to text mode, so close the SDL window
 			{
 				SDL_QuitSubSystem(SDL_INIT_VIDEO);
-				sdl_screen = 0;
+				sdl_window = 0;
 			}
 			SDL_PumpEvents();
 		}
