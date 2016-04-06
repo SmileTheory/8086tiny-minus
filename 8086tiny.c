@@ -577,7 +577,6 @@ int main(int argc, char **argv)
 			OPCODE 12: // ROL|ROR|RCL|RCR|SHL|SHR|???|SAR reg/mem, 1/CL/imm (80186)
 				scratch2_uint = SIGN_OF(mem[rm_addr]),
 				scratch_uint = extra ? // xxx reg/mem, imm
-					++reg_ip,
 					(char)i_data1
 				: // xxx reg/mem, CL
 					i_d
@@ -594,7 +593,7 @@ int main(int argc, char **argv)
 					else // Rotate/shift left operations
 						R_M_OP(mem[rm_addr], <<=, scratch_uint);
 					if (i_reg > 3) // Shift operations
-						set_opcode(0x10); // Decode like ADC
+						set_flags_type = FLAGS_UPDATE_SZP; // Shift instructions affect SZP
 					if (i_reg > 4) // SHR or SAR
 						set_CF(op_dest >> (scratch_uint - 1) & 1);
 				}
