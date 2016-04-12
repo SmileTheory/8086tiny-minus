@@ -58,8 +58,8 @@ main:
 
 ; These values (BIOS ID string, BIOS date and so forth) go at the very top of memory
 
-biosstr	db	'8086tiny BIOS Revision 1.61!', 0, 0		; Why not?
-mem_top	db	0xea, 0, 0x01, 0, 0xf0, '03/08/14', 0, 0xfe, 0
+biosstr	db	'8086tiny-minus BIOS rv 0.01!', 0, 0		; Why not?
+mem_top	db	0xea, 0, 0x01, 0, 0xf0, '06/04/16', 0, 0xfe, 0
 
 bios_entry:
 
@@ -242,6 +242,13 @@ boot:	mov	ax, 0
 	mov	word [es:4*0x41], cx
 	mov	cx, 0xf000
 	mov	word [es:4*0x41 + 2], cx
+
+; Set pointer to INT 74 for mouse
+
+	mov	cx, int74
+	mov	word [es:4*0x74], cx
+	mov	cx, 0xf000
+	mov	word [es:4*0x74 + 2], cx
 
 ; Set up last 16 bytes of memory, including boot jump, BIOS date, machine ID byte
 
@@ -2410,11 +2417,150 @@ int15:	; Here we do not support any of the functions, and just return
 	; cmp	ah, 0x88
 	; je	int15_getextmem
 
+	cmp ah, 0xc2
+	je int15_mouse
 ; Otherwise, function not supported
 
 	mov	ah, 0x86
-
 	jmp	reach_stack_stc
+
+int15_mouse:
+	cmp al, 0x00
+	je mouse_enable
+	cmp al, 0x01
+	je mouse_reset
+	cmp al, 0x02
+	je mouse_set_sample_rate
+	cmp al, 0x03
+	je mouse_set_resolution
+	cmp al, 0x04
+	je mouse_read_device_type
+	cmp al, 0x05
+	je mouse_init
+	cmp al, 0x06
+	je mouse_extended_command
+	cmp al, 0x07
+	je mouse_far_call_init
+
+	mov ah, 0x86
+	jmp reach_stack_stc
+
+mouse_enable:
+	cpu	186
+	shl bh, 5
+	cpu 8086
+	mov ah, [cs:mouse_status]
+	and ah, 0xdf
+	or ah, bh
+	mov [cs:mouse_status], ah
+	mov ah, 0x00
+	clc
+	iret
+
+mouse_reset:
+	mov byte [cs:mouse_status], 0x00
+	mov byte [cs:mouse_sample_rate], 0x64
+	mov byte [cs:mouse_resolution], 0x03
+	mov bx, 0x00
+	mov ah, 0x00
+	clc
+	iret
+
+mouse_set_sample_rate:
+	cmp bh, 0x00
+	jne mouse_sample_rate_next_1
+	mov byte [cs:mouse_sample_rate], 10
+	jmp mouse_set_sample_rate_finish
+mouse_sample_rate_next_1:
+	cmp bh, 0x01
+	jne mouse_sample_rate_next_2
+	mov byte [cs:mouse_sample_rate], 20
+	jmp mouse_set_sample_rate_finish
+mouse_sample_rate_next_2:
+	cmp bh, 0x02
+	jne mouse_sample_rate_next_3
+	mov byte [cs:mouse_sample_rate], 40
+	jmp mouse_set_sample_rate_finish
+mouse_sample_rate_next_3:
+	cmp bh, 0x03
+	jne mouse_sample_rate_next_4
+	mov byte [cs:mouse_sample_rate], 60
+	jmp mouse_set_sample_rate_finish
+mouse_sample_rate_next_4:
+	cmp bh, 0x04
+	jne mouse_sample_rate_next_5
+	mov byte [cs:mouse_sample_rate], 80
+	jmp mouse_set_sample_rate_finish
+mouse_sample_rate_next_5:
+	cmp bh, 0x05
+	jne mouse_sample_rate_next_6
+	mov byte [cs:mouse_sample_rate], 100
+	jmp mouse_set_sample_rate_finish
+mouse_sample_rate_next_6:
+	cmp bh, 0x06
+	jne mouse_sample_rate_error
+	mov byte [cs:mouse_sample_rate], 200
+	jmp mouse_set_sample_rate_finish
+mouse_sample_rate_error:
+	mov ah, 0x02
+	jmp	reach_stack_stc
+mouse_set_sample_rate_finish:
+	mov ah, 0x00
+	clc
+	iret
+
+mouse_set_resolution:
+	mov [cs:mouse_resolution], bh
+	mov ah, 0x00
+	clc
+	iret
+
+mouse_read_device_type:
+	mov bh, 0x00
+	mov ah, 0x00
+	clc
+	iret
+
+mouse_init:
+	mov [cs:mouse_packet_size], bh
+	jmp mouse_reset
+
+mouse_extended_command:
+	cmp bh, 0x00
+	je mouse_return_status
+	cmp bh, 0x01
+	je mouse_set_scaling_1to1
+	cmp bh, 0x02
+	je mouse_set_scaling_2to1
+	mov ah, 0x01
+	jmp	reach_stack_stc
+mouse_return_status:
+	mov bl, [cs:mouse_status]
+	mov cl, [cs:mouse_resolution]
+	mov dl, [cs:mouse_sample_rate]
+	mov ah, 0x00
+	clc
+	iret
+mouse_set_scaling_1to1:
+	mov ah, [cs:mouse_status]
+	and ah, 0xef
+	mov [cs:mouse_status], ah
+	mov ah, 0x00
+	clc
+	iret
+mouse_set_scaling_2to1:
+	mov ah, [cs:mouse_status]
+	or ah, 0x10
+	mov [cs:mouse_status], ah
+	mov ah, 0x00
+	clc
+	iret
+mouse_far_call_init:
+	mov [cs:mouse_call_seg], es
+	mov [cs:mouse_call_off], bx
+	mov ah, 0x00
+	clc
+	iret
 
 ;  int15_sysconfig: ; Return address of system configuration table in ROM
 ;
@@ -2769,6 +2915,63 @@ int41_max_heads	db 0
 		dw 0
 int41_max_sect	db 0
 		db 0
+
+; ************************* INT 74h handler - mouse driver (8086tiny internal)
+
+int74:
+	push ax
+	mov ah, [cs:mouse_status]
+	test ah, 00100000b
+	jnz i74_mouse_enabled
+	pop ax
+	iret
+i74_mouse_enabled:
+	push bx
+	push cx
+	push dx
+	push si
+	push di
+	push bp
+	push ds
+	push es
+	mov	ax, 0x40	; Set segment to BIOS data area segment (0x40)
+	mov	es, ax
+
+	mov ah, 0
+	mov al, [es:this_mouse_buttons-bios_data]
+	push ax
+	mov al, [es:this_mouse_dx-bios_data]
+	push ax
+	mov al, [es:this_mouse_dy-bios_data]
+	push ax
+	mov al, 0
+	push ax
+
+	push cs
+	mov ax, i74_callback_return
+	push ax
+
+	mov ax, [cs:mouse_call_seg]
+	push ax
+	mov ax, [cs:mouse_call_off]
+	push ax
+	retf
+i74_callback_return:
+	pop ax
+	pop ax
+	pop ax
+	pop ax
+
+	pop es
+	pop ds
+	pop bp
+	pop di
+	pop si
+	pop dx
+	pop cx
+	pop bx
+	pop ax
+	iret
 
 ; ************************* ROM configuration table
 
@@ -3616,7 +3819,7 @@ lpt1addr	dw	0
 lpt2addr	dw	0
 lpt3addr	dw	0
 lpt4addr	dw	0
-equip		dw	0b0000000000100001
+equip		dw	0b0000000000100101    ;at 40:10
 ;equip		dw	0b0000000100100001
 		db	0
 memsize		dw	0x280
@@ -3625,13 +3828,13 @@ memsize		dw	0x280
 keyflags1	db	0
 keyflags2	db	0
 		db	0
-kbbuf_head	dw	kbbuf-bios_data
-kbbuf_tail	dw	kbbuf-bios_data
-kbbuf: times 32	db	'X'
-drivecal	db	0
+kbbuf_head	dw	kbbuf-bios_data       ;at 40:1a
+kbbuf_tail	dw	kbbuf-bios_data       ;at 40:1c
+kbbuf: times 32	db	'X'               ;at 40:1e
+drivecal	db	0                     ;at 40:3e
 diskmotor	db	0
 motorshutoff	db	0x07
-disk_laststatus	db	0
+disk_laststatus	db	0                 ;at 40:41
 times 7		db	0
 vidmode		db	0x03
 vid_cols	dw	80
@@ -3671,13 +3874,13 @@ vidmode_opt	db	0 ; 0x70
 		db	0
 		db	0
 		db	0
+		db	0             ; at 40:90
 		db	0
 		db	0
 		db	0
 		db	0
 		db	0
-		db	0
-kb_mode		db	0
+kb_mode		db	0         ; at 40:96
 kb_led		db	0
 		db	0
 		db	0
@@ -3687,7 +3890,7 @@ boot_device	db	0
 crt_curpos_x	db	0
 crt_curpos_y	db	0
 key_now_down	db	0
-next_key_fn	db	0
+next_key_fn	db	0          ; at 40:A0
 cursor_visible	db	1
 escape_flag_last	db	0
 next_key_alt	db	0
@@ -3699,6 +3902,9 @@ timer0_freq	dw	0xffff ; PIT channel 0 (55ms)
 timer2_freq	dw	0      ; PIT channel 2
 cga_vmode	db	0
 vmem_offset	dw	0      ; Video RAM offset
+this_mouse_dx db 0          ; at 40:AF
+this_mouse_dy db 0          ; at 40:B0
+this_mouse_buttons db 0     ; at 40:B1
 ending:		times (0xff-($-com1addr)) db	0
 
 ; Keyboard scan code tables
@@ -3803,6 +4009,14 @@ crt_curpos_y_last	db	0
 
 last_int8_msec	dw	0
 last_key_sdl	db 	0
+
+; Internal variables for PS2 mouse
+mouse_status      db 0x00 ;bit 5: enable, bit 4: double scaling, bit 2: LMB, bit 0: RMB
+mouse_sample_rate db 0x64
+mouse_resolution  db 0x02
+mouse_packet_size db 0x01
+mouse_call_seg    dw 0x0000
+mouse_call_off    dw 0x0000
 
 ; Now follow the tables for instruction decode helping
 
