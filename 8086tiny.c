@@ -433,24 +433,27 @@ int sdlKeyDriver()
 
 		if (mouseDeltaX < 0) mouseButtons |= 0x10;
 		if (mouseDeltaY < 0) mouseButtons |= 0x20;
-		if (mouseDeltaX > 127) mouseDeltaX = 127;
-		if (mouseDeltaY > 127) mouseDeltaY = 127;
-		if (mouseDeltaX < -128) mouseDeltaX = -128;
-		if (mouseDeltaY < -128) mouseDeltaY = -128;
+		if (mouseDeltaX > 255) mouseDeltaX = 255;
+		if (mouseDeltaY > 255) mouseDeltaY = 255;
+		if (mouseDeltaX < -256) mouseDeltaX = -256;
+		if (mouseDeltaY < -256) mouseDeltaY = -256;
 
-		mem[0x4AF] = mouseDeltaX;
-		mem[0x4B0] = mouseDeltaY;
-		mem[0x4B1] = mouseButtons;
+		mem[0x4AF] = mouseButtons;
+		mem[0x4B0] = (unsigned int)(mouseDeltaX) & 0xFF;
+		mem[0x4B1] = (unsigned int)(mouseDeltaY) & 0xFF;
 
 		mouseDeltaX = 0;
 		mouseDeltaY = 0;
 		mouseButtons &= 0x0F;
+		io_ports[0x64] = 0x21;
 		pc_interrupt(0x74);
 	}
 
 	return 0;
 }
 #endif
+
+int mousePacket = 0;
 
 // Emulator entry point
 int main(int argc, char **argv)
@@ -772,7 +775,8 @@ int main(int argc, char **argv)
 				io_ports[0x42] = --io_ports[0x40]; // PIT channel 0/2 read placeholder
 				io_ports[0x3DA] ^= 9; // CGA refresh
 				scratch_uint = extra ? regs16[REG_DX] : (unsigned char)i_data0;
-				scratch_uint == 0x60 && (io_ports[0x64] = 0); // Scancode read flag
+				scratch_uint == 0x60 && io_ports[0x64] == 0x21 && (io_ports[0x60] = mem[0x4AF + mousePacket], mousePacket = (mousePacket == 2) ? (io_ports[0x64] = 0) : mousePacket + 1); // mouse
+				scratch_uint == 0x60 && io_ports[0x64] == 1 && (io_ports[0x64] = 0); // Scancode read flag
 				scratch_uint == 0x3D5 && (io_ports[0x3D4] >> 1 == 7) && (io_ports[0x3D5] = ((mem[0x49E]*80 + mem[0x49D] + CAST(short)mem[0x4AD]) & (io_ports[0x3D4] & 1 ? 0xFF : 0xFF00)) >> (io_ports[0x3D4] & 1 ? 0 : 8)); // CRT cursor position
 				R_M_OP(regs8[REG_AL], =, io_ports[scratch_uint]);
 			OPCODE 22: // OUT DX/imm8, AL/AX

@@ -2408,8 +2408,8 @@ int14:
 int15:	; Here we do not support any of the functions, and just return
 	; a function not supported code - like the original IBM PC/XT does.
 
-	; cmp	ah, 0xc0
-	; je	int15_sysconfig
+	 cmp	ah, 0xc0
+	 je	int15_sysconfig
 	; cmp	ah, 0x41
 	; je	int15_waitevent
 	; cmp	ah, 0x4f
@@ -2562,14 +2562,14 @@ mouse_far_call_init:
 	clc
 	iret
 
-;  int15_sysconfig: ; Return address of system configuration table in ROM
-;
-;	mov	bx, 0xf000
-;	mov	es, bx
-;	mov	bx, rom_config
-;	mov	ah, 0
-;
-;	jmp	reach_stack_clc
+  int15_sysconfig: ; Return address of system configuration table in ROM
+
+	mov	bx, 0xf000
+	mov	es, bx
+	mov	bx, rom_config
+	mov	ah, 0
+
+	jmp	reach_stack_clc
 ;
 ;  int15_waitevent: ; Events not supported
 ;
@@ -2934,15 +2934,13 @@ i74_mouse_enabled:
 	push bp
 	push ds
 	push es
-	mov	ax, 0x40	; Set segment to BIOS data area segment (0x40)
-	mov	es, ax
 
 	mov ah, 0
-	mov al, [es:this_mouse_buttons-bios_data]
+	in al, 0x60
 	push ax
-	mov al, [es:this_mouse_dx-bios_data]
+	in al, 0x60
 	push ax
-	mov al, [es:this_mouse_dy-bios_data]
+	in al, 0x60
 	push ax
 	mov al, 0
 	push ax
@@ -2976,9 +2974,12 @@ i74_callback_return:
 ; ************************* ROM configuration table
 
 rom_config	dw 16		; 16 bytes following
-		db 0xfe		; Model
-		db 'A'		; Submodel
-		db 'C'		; BIOS revision
+;		db 0xfe		; Model
+;		db 'A'		; Submodel
+;		db 'C'		; BIOS revision
+		db 0xfc		; Model
+		db 0x04		; Submodel
+		db 0x00		; BIOS revision
 		db 0b00100000   ; Feature 1
 		db 0b00000000   ; Feature 2
 		db 0b00000000   ; Feature 3
@@ -3902,9 +3903,9 @@ timer0_freq	dw	0xffff ; PIT channel 0 (55ms)
 timer2_freq	dw	0      ; PIT channel 2
 cga_vmode	db	0
 vmem_offset	dw	0      ; Video RAM offset
-this_mouse_dx db 0          ; at 40:AF
-this_mouse_dy db 0          ; at 40:B0
-this_mouse_buttons db 0     ; at 40:B1
+this_mouse_buttons db 0     ; at 40:AF
+this_mouse_dx db 0          ; at 40:B0
+this_mouse_dy db 0          ; at 40:B1
 ending:		times (0xff-($-com1addr)) db	0
 
 ; Keyboard scan code tables
