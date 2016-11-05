@@ -18,6 +18,8 @@
 #include "SDL.h"
 #endif
 
+#define CLAMP(a,b,c) ((a) <= (b) ? (b) : (a) >= (c) ? (c) : (a))
+
 // Emulator system constants
 #define IO_PORT_COUNT 0x10000
 #define RAM_SIZE 0x10FFF0
@@ -172,6 +174,7 @@ SDL_Event sdl_event;
 int sdl_windowFocus = 0;
 unsigned int rawPixels[720 * 350];
 unsigned short vid_addr_lookup[VIDEO_RAM_SIZE], cga_colors[4] = {0 /* Black */, 0x1F1F /* Cyan */, 0xE3E3 /* Magenta */, 0xFFFF /* White */};
+int mousePacket = 0;
 #endif
 
 // Helper functions
@@ -260,120 +263,25 @@ void audio_callback(void *data, unsigned char *stream, int len)
 }
 
 
-// Convert SDL2 keycodes to SDL1
-// FIXME: change bios to use SDL2 codes
-int KeysymToCode(int sym, int numlock)
-{
-	// 0x40000039 = SDLK_CAPSLOCK     -> 301
-	//
-	// 0x4000003A = SDLK_F1           -> 282
-	// 0x4000003B = SDLK_F2           -> 283
-	// 0x4000003C = SDLK_F3           -> 284
-	// 0x4000003D = SDLK_F4           -> 285
-	// 0x4000003E = SDLK_F5           -> 286
-	// 0x4000003F = SDLK_F6           -> 287
-	// 0x40000040 = SDLK_F7           -> 288
-	// 0x40000041 = SDLK_F8           -> 289
-	// 0x40000042 = SDLK_F9           -> 290
-	// 0x40000043 = SDLK_F10          -> 291
-	// 0x40000044 = SDLK_F11          -> 292
-	// 0x40000045 = SDLK_F12          -> 293
-	//
-	// 0x40000046 = SDLK_PRINTSCREEN  -> 316
-	// 0x40000047 = SDLK_SCROLLLOCK   -> 302
-	// 0x40000048 = SDLK_PAUSE        ->  19
-	// 0x40000049 = SDLK_INSERT       -> 277
-	// 0x4000004A = SDLK_HOME         -> 278
-	// 0x4000004B = SDLK_PAGEUP       -> 280
-	// 0x4000004C = ???
-	// 0x4000004D = SDLK_END          -> 279
-	// 0x4000004E = SDLK_PAGEDOWN     -> 281
-	// 0x4000004F = SDLK_RIGHT        -> 275
-	// 0x40000050 = SDLK_LEFT         -> 276
-	// 0x40000051 = SDLK_DOWN         -> 274
-	// 0x40000052 = SDLK_UP           -> 273
-	// 0x40000053 = SDLK_NUMLOCKCLEAR -> 300
-	//
-	// 0x40000054 = SDLK_KP_DIVIDE    -> '/'
-	// 0x40000055 = SDLK_KP_MULTIPLY  -> '*'
-	// 0x40000056 = SDLK_KP_MINUS     -> '-'
-	// 0x40000057 = SDLK_KP_PLUS      -> '+'
-	// 0x40000058 = SDLK_KP_ENTER     -> '\n'
-	// 0x40000059 = SDLK_KP_1         -> '1' or 279
-	// 0x4000005A = SDLK_KP_2         -> '2' or 274
-	// 0x4000005B = SDLK_KP_3         -> '3' or 281
-	// 0x4000005C = SDLK_KP_4         -> '4' or 276
-	// 0x4000005D = SDLK_KP_5         -> '5' or 0
-	// 0x4000005E = SDLK_KP_6         -> '6' or 275
-	// 0x4000005F = SDLK_KP_7         -> '7' or 278
-	// 0x40000060 = SDLK_KP_8         -> '8' or 273
-	// 0x40000061 = SDLK_KP_9         -> '9' or 280
-	// 0x40000062 = SDLK_KP_0         -> '0' or 277
-	// 0x40000063 = SDLK_KP_PERIOD    -> '.' or 127
-
-	// ...
-	// 0x400000E0 = SDLK_LCTRL        -> 306
-	// 0x400000E1 = SDLK_LSHIFT       -> 304
-	// 0x400000E2 = SDLK_LALT         -> 308
-	// 0x400000E3 = SDLK_LGUI         -> ???
-	// 0x400000E4 = SDLK_RCTRL        -> 305
-	// 0x400000E5 = SDLK_RSHIFT       -> 303
-	// 0x400000E6 = SDLK_RALT         -> 307
-	// 0x400000E7 = SDLK_RGUI         -> ???
-	int keylut[] = { 316, 302, 19, 277, 278, 280, 0, 279, 281, 275, 276, 274, 273, 300 };
-	int keylut2[] = { 306, 304, 308, 0, 305, 303, 307, 0 };
-	int keylut3[] = { '/', '*', '-', '+', '\n', 279, 274, 281, 276, 0, 275, 278, 273, 280, 277, 127 };
-
-	if (!(sym & (1 << 30)))
-		return sym;
-
-	if (sym == SDLK_CAPSLOCK)
-		return 301;
-
-	if (sym >= SDLK_F1 && sym <= SDLK_F12)
-		return sym - SDLK_F1 + 282;
-
-	if (sym >= SDLK_PRINTSCREEN && sym <= SDLK_NUMLOCKCLEAR)
-		return keylut[sym - SDLK_PRINTSCREEN];
-
-	if (sym >= SDLK_KP_DIVIDE && sym <= SDLK_KP_PERIOD)
-		if (numlock)
-			return "/*-+\n1234567890."[sym - SDLK_KP_DIVIDE];
-		else
-			return keylut3[sym - SDLK_KP_DIVIDE];
-
-	if (sym == SDLK_KP_EQUALS)
-		return '=';
-
-	if (sym >= SDLK_LCTRL && sym <= SDLK_RGUI)
-		return keylut2[sym - SDLK_LCTRL];
-
-	return 0;
-}
-
 int sdlKeyDriver()
 {
-	static short keyBuffer[32];
-	static int keyIn = 0, keyOut = 0;
-	static int mouseDeltaX = 0, mouseDeltaY = 0, mouseButtons = 8, mouseEvent = 0;
-
-	// have to flush all events or some are repeated
-	while (((keyIn + 1) & 31) != keyOut && SDL_PollEvent(&sdl_event))
+	if (SDL_PollEvent(&sdl_event))
 	{
 		int type = sdl_event.type;
 
 		if (type == SDL_KEYDOWN || type == SDL_KEYUP)
 		{
-			int mod = sdl_event.key.keysym.mod;
+			int mod = sdl_event.key.keysym.mod, sym = sdl_event.key.keysym.sym;
 
-			keyBuffer[keyIn++] = 0x400
+			CAST(short)mem[0x4A6] = 0x400
 				+ 0x800 * !!(mod & KMOD_ALT)
 				+ 0x1000 * !!(mod & KMOD_SHIFT)
 				+ 0x2000 * !!(mod & KMOD_CTRL)
 				+ 0x4000 * (type == SDL_KEYUP)
-				+ KeysymToCode(sdl_event.key.keysym.sym, mod & KMOD_NUM);
+				+ 0x8000 * !!(sym & 0x40000000)
+				+ (sym & 0x3FF);
 
-			keyIn &= 31;
+			pc_interrupt(7);
 		}
 		else if (type == SDL_WINDOWEVENT)
 		{
@@ -388,27 +296,32 @@ int sdlKeyDriver()
 		{
 			if (type == SDL_MOUSEMOTION)
 			{
-				mouseEvent = 1;
-				mouseDeltaX += sdl_event.motion.xrel;
-				mouseDeltaY -= sdl_event.motion.yrel;
+				int x = sdl_event.motion.xrel, y = -sdl_event.motion.yrel;
+				mem[0x4AF] &= 0x0F;
+				mem[0x4AF] |= 0x10 * (x < 0) + 0x20 * (y < 0);
+				mem[0x4B0] = CLAMP(x, -256, 255);
+				mem[0x4B1] = CLAMP(y, -256, 255);
+
+				io_ports[0x64] = 0x21;
+				pc_interrupt(0x74);
 			}
 			else if (type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP)
 			{
-				int button = sdl_event.button.button;
-				int mask = 0;
-				mouseEvent = 1;
+				int b = sdl_event.button.button;
+				int mask = 1 * (b == SDL_BUTTON_LEFT)
+					     + 2 * (b == SDL_BUTTON_RIGHT)
+					     + 4 * (b == SDL_BUTTON_MIDDLE);
 
-				if (button == SDL_BUTTON_LEFT)
-					mask = 0x01;
-				else if (button == SDL_BUTTON_RIGHT)
-					mask = 0x02;
-				else if (button == SDL_BUTTON_MIDDLE)
-					mask = 0x04;
-
+				mem[0x4AF] &= 0x0F;
 				if (type == SDL_MOUSEBUTTONDOWN)
-					mouseButtons |= mask;
+					mem[0x4AF] |= mask;
 				else
-					mouseButtons &= ~mask;
+					mem[0x4AF] &= ~mask;
+				mem[0x4B0] = 0;
+				mem[0x4B1] = 0;
+
+				io_ports[0x64] = 0x21;
+				pc_interrupt(0x74);
 			}
 		}
 		else
@@ -421,39 +334,9 @@ int sdlKeyDriver()
 		}
 	}
 
-	if (keyIn != keyOut)
-	{
-		CAST(short)mem[0x4A6] = keyBuffer[keyOut++];
-		keyOut &= 31;
-		pc_interrupt(7);
-	}
-	else if (mouseEvent)
-	{
-		mouseEvent = 0;
-
-		if (mouseDeltaX < 0) mouseButtons |= 0x10;
-		if (mouseDeltaY < 0) mouseButtons |= 0x20;
-		if (mouseDeltaX > 255) mouseDeltaX = 255;
-		if (mouseDeltaY > 255) mouseDeltaY = 255;
-		if (mouseDeltaX < -256) mouseDeltaX = -256;
-		if (mouseDeltaY < -256) mouseDeltaY = -256;
-
-		mem[0x4AF] = mouseButtons;
-		mem[0x4B0] = (unsigned int)(mouseDeltaX) & 0xFF;
-		mem[0x4B1] = (unsigned int)(mouseDeltaY) & 0xFF;
-
-		mouseDeltaX = 0;
-		mouseDeltaY = 0;
-		mouseButtons &= 0x0F;
-		io_ports[0x64] = 0x21;
-		pc_interrupt(0x74);
-	}
-
 	return 0;
 }
 #endif
-
-int mousePacket = 0;
 
 // Emulator entry point
 int main(int argc, char **argv)
@@ -775,7 +658,9 @@ int main(int argc, char **argv)
 				io_ports[0x42] = --io_ports[0x40]; // PIT channel 0/2 read placeholder
 				io_ports[0x3DA] ^= 9; // CGA refresh
 				scratch_uint = extra ? regs16[REG_DX] : (unsigned char)i_data0;
+#ifndef NO_GRAPHICS
 				scratch_uint == 0x60 && io_ports[0x64] == 0x21 && (io_ports[0x60] = mem[0x4AF + mousePacket], mousePacket = (mousePacket == 2) ? (io_ports[0x64] = 0) : mousePacket + 1); // mouse
+#endif
 				scratch_uint == 0x60 && io_ports[0x64] == 1 && (io_ports[0x64] = 0); // Scancode read flag
 				scratch_uint == 0x3D5 && (io_ports[0x3D4] >> 1 == 7) && (io_ports[0x3D5] = ((mem[0x49E]*80 + mem[0x49D] + CAST(short)mem[0x4AD]) & (io_ports[0x3D4] & 1 ? 0xFF : 0xFF00)) >> (io_ports[0x3D4] & 1 ? 0 : 8)); // CRT cursor position
 				R_M_OP(regs8[REG_AL], =, io_ports[scratch_uint]);

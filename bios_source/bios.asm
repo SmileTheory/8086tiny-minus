@@ -407,18 +407,18 @@ int7:	; Whenever the user presses a key, INT 7 is called by the emulator.
   sdl_check_specials:
 
 	mov	bx, ax
-	and	bh, 7 ; If key is between 52F and 534 (Shift/Ctrl/Alt), ignore the key state flags
-	cmp	bx, 0x52f
+	and	bh, 0x83 ; If key is between 0x80E0 and 0x80E7 (Shift/Ctrl/Alt), ignore the key state flags
+	cmp	bx, 0x80E1
 	je	sdl_just_press_shift
-	cmp	bx, 0x530
+	cmp	bx, 0x80E5
 	je	sdl_just_press_shift
-	cmp	bx, 0x533
+	cmp	bx, 0x80E2
 	je	sdl_just_press_alt
-	cmp	bx, 0x534
+	cmp	bx, 0x80E6
 	je	sdl_just_press_alt
-	cmp	bx, 0x531
+	cmp	bx, 0x80E0
 	je	sdl_just_press_ctrl
-	cmp	bx, 0x532
+	cmp	bx, 0x80E4
 	je	sdl_just_press_ctrl
 	jmp	sdl_check_alt
 
@@ -470,7 +470,7 @@ int7:	; Whenever the user presses a key, INT 7 is called by the emulator.
 
   sdl_no_mods:
 
-	and	ah, 1 ; We have processed all SDL modifiers, so remove them
+	and	ah, 0x83 ; We have processed all SDL modifiers, so remove them
 
 	;cmp	ax, 160 ; Alt+Space?
 	;jne	next_sdl_alt_keys
@@ -479,13 +479,14 @@ int7:	; Whenever the user presses a key, INT 7 is called by the emulator.
 
   check_sdl_f_keys:
 
-	cmp	ax, 0x125
-	ja	i2_dne ; Unknown key
+	cmp	ax, 0x8045
+	ja	check_sdl_pgup_pgdn_keys
 
-	cmp	ax, 0x11a
+	cmp	ax, 0x803a
 	jb	check_sdl_pgup_pgdn_keys
 
-	sub	ax, 0xdf ; F1 - F10
+	;sub	ax, 0xdf ; F1 - F10, F1 = 0x11a, 0x11a - 0x0df = 0x3b
+	sub	ax, 0x7fff; F1 - F10, F1 = 0x803a, 0x803a - 0x7fff = 0x3b
 	cmp	ax, 0x45
 	jb	check_sdl_f_keys2
 	add	ax, 0x12 ; F11 - F12
@@ -498,12 +499,12 @@ int7:	; Whenever the user presses a key, INT 7 is called by the emulator.
 
   check_sdl_pgup_pgdn_keys:
 
-	cmp	ax, 0x116
+	cmp	ax, 0x804a
 	jb	check_sdl_cursor_keys
-	cmp	ax, 0x119
+	cmp	ax, 0x804e
 	ja	check_sdl_cursor_keys
 
-	sub	ax, 0x116
+	sub	ax, 0x804a
 	mov	bx, pgup_pgdn_xlt
 	cs	xlat
 
@@ -513,11 +514,13 @@ int7:	; Whenever the user presses a key, INT 7 is called by the emulator.
 
   check_sdl_cursor_keys:
 
-	cmp	ax, 0x111 ; SDL cursor keys
+	cmp	ax, 0x804f ; SDL cursor keys
 	jb	sdl_process_key ; No special handling for other keys yet
+	cmp	ax, 0x8052
+	ja	sdl_process_key
 	
-	sub	ax, 0x111
-	mov	bx, unix_cursor_xlt
+	sub	ax, 0x804f
+	mov	bx, sdl2_cursor_xlt
 	xlat	; Convert SDL cursor keys to scancode
 
 	mov	bh, al
@@ -3903,7 +3906,7 @@ timer0_freq	dw	0xffff ; PIT channel 0 (55ms)
 timer2_freq	dw	0      ; PIT channel 2
 cga_vmode	db	0
 vmem_offset	dw	0      ; Video RAM offset
-this_mouse_buttons db 0     ; at 40:AF
+this_mouse_buttons db 8     ; at 40:AF
 this_mouse_dx db 0          ; at 40:B0
 this_mouse_dy db 0          ; at 40:B1
 ending:		times (0xff-($-com1addr)) db	0
@@ -3987,13 +3990,17 @@ colour_table	db	30, 34, 32, 36, 31, 35, 33, 37
 
 low_ascii_conv	db	' ', 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, '><|!|$', 250, '|^v><--^v'
 
-; Conversion from UNIX cursor keys/SDL keycodes to scancodes
+; Conversion from UNIX cursor keys to scancodes
 
 unix_cursor_xlt	db	0x48, 0x50, 0x4d, 0x4b
 
-; Conversion from SDL keycodes to Home/End/PgUp/PgDn scancodes
+; Conversion from SDL2 keycodes to right/left/down/up scancodes
 
-pgup_pgdn_xlt	db	0x47, 0x4f, 0x49, 0x51
+sdl2_cursor_xlt	db	0x4d, 0x4b, 0x50, 0x48
+
+; Conversion from SDL2 keycodes to Home/PgUp/?/End/PgDn scancodes
+
+pgup_pgdn_xlt	db	0x47, 0x49, 0, 0x4f, 0x51
 
 ; Internal variables for VMEM driver
 
