@@ -172,7 +172,7 @@ SDL_Renderer *sdl_renderer;
 SDL_Texture *sdl_texture;
 SDL_Event sdl_event;
 int sdl_windowFocus = 0;
-unsigned int rawPixels[720 * 350];
+unsigned int *rawPixels, rawPixelsPitch;
 unsigned short vid_addr_lookup[VIDEO_RAM_SIZE], cga_colors[4] = {0 /* Black */, 0x1F1F /* Cyan */, 0xE3E3 /* Magenta */, 0xFFFF /* White */};
 int mousePacket = 0;
 #endif
@@ -813,9 +813,10 @@ int main(int argc, char **argv)
 
 				// Refresh SDL display from emulated graphics card video RAM
 				vid_mem_base = mem + 0xB0000 + 0x8000*(mem[0x4AC] ? 1 : io_ports[0x3B8] >> 7); // B800:0 for CGA/Hercules bank 2, B000:0 for Hercules bank 1
+				SDL_LockTexture(sdl_texture, NULL, &rawPixels, &rawPixelsPitch);
 				for (int i = 0; i < GRAPHICS_X * GRAPHICS_Y / 4; i++)
 					rawPixels[i] = pixel_colors[15 & (vid_mem_base[vid_addr_lookup[i]] >> 4 * !(i & 1))];
-				SDL_UpdateTexture(sdl_texture, NULL, rawPixels, GRAPHICS_X);
+				SDL_UnlockTexture(sdl_texture);
 				SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
 				SDL_RenderPresent(sdl_renderer);
 			}
