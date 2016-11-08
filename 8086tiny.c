@@ -26,6 +26,35 @@
 #define REGS_BASE 0xF0000
 #define VIDEO_RAM_SIZE 0x10000
 
+// IO ports
+// from http://bochs.sourceforge.net/techspec/PORTS.LST
+#define IO_PIC1_INTERRUPT_REQUEST_REGISTER 0x20
+#define IO_PIT_COUNTER_0                   0x40
+#define IO_PIT_COUNTER_2                   0x42
+#define IO_PIT_MODE                        0x43
+#define IO_KEYBOARD_DATA_PORT              0x60
+#define IO_KEYBOARD_CONTROLLER_PORT_B      0x61
+#define IO_KEYBOARD_CONTROLLER_READ_STATUS 0x64
+#define IO_MDA_CRT_INDEX_REGISTER          0x3B4
+#define IO_MDA_CRT_DATA_REGISTER           0x3B5
+#define IO_MDA_CRT_MODE_CONTROL_REGISTER   0x3B8
+#define IO_CGA_CRT_INDEX_REGISTER          0x3D4
+#define IO_CGA_CRT_DATA_REGISTER           0x3D5
+#define IO_CGA_STATUS_REGISTER             0x3DA
+
+// BIOS data area
+#define BD_THIS_CRT_CURPOS_X  0x49D
+#define BD_THIS_CRT_CURPOS_Y  0x49E
+#define BD_THIS_KEYSTROKE     0x4A6
+#define BD_TIMER0_FREQ        0x4A8
+#define BD_TIMER2_FREQ        0x4AA
+#define BD_CGA_VMODE          0x4AC
+#define BD_VMEM_OFFSET        0x4AD
+#define BD_THIS_MOUSE_BUTTONS 0x4AF
+#define BD_THIS_MOUSE_DX      0x4B0
+#define BD_THIS_MOUSE_DY      0x4B1
+
+
 // Graphics/timer/keyboard update delays (explained later)
 #ifndef GRAPHICS_UPDATE_DELAY
 #define GRAPHICS_UPDATE_DELAY 360000
@@ -145,9 +174,9 @@
 
 // Keyboard driver for console. This may need changing for UNIX/non-UNIX platforms
 #ifdef _WIN32
-#define KEYBOARD_DRIVER kbhit() && (mem[0x4A6] = getch(), pc_interrupt(7))
+#define KEYBOARD_DRIVER kbhit() && (mem[BD_THIS_KEYSTROKE] = getch(), pc_interrupt(7))
 #else
-#define KEYBOARD_DRIVER read(0, mem + 0x4A6, 1) && (int8_asap = (mem[0x4A6] == 0x1B), pc_interrupt(7))
+#define KEYBOARD_DRIVER read(0, mem + BD_THIS_KEYSTROKE, 1) && (int8_asap = (mem[BD_THIS_KEYSTROKE] == 0x1B), pc_interrupt(7))
 #endif
 
 // Keyboard driver for SDL
@@ -257,9 +286,9 @@ int AAA_AAS(char which_operation)
 void audio_callback(void *data, unsigned char *stream, int len)
 {
 	for (int i = 0; i < len; i++)
-		stream[i] = (spkr_en == 3) && CAST(unsigned short)mem[0x4AA] ? -((54 * wave_counter++ / CAST(unsigned short)mem[0x4AA]) & 1) : sdl_audio.silence;
+		stream[i] = (spkr_en == 3) && CAST(unsigned short)mem[BD_TIMER2_FREQ] ? -((54 * wave_counter++ / CAST(unsigned short)mem[BD_TIMER2_FREQ]) & 1) : sdl_audio.silence;
 
-	spkr_en = io_ports[0x61] & 3;
+	spkr_en = io_ports[IO_KEYBOARD_CONTROLLER_PORT_B] & 3;
 }
 
 
@@ -273,7 +302,7 @@ int sdlKeyDriver()
 		{
 			int mod = sdl_event.key.keysym.mod, sym = sdl_event.key.keysym.sym;
 
-			CAST(short)mem[0x4A6] = 0x400
+			CAST(short)mem[BD_THIS_KEYSTROKE] = 0x400
 				+ 0x800 * !!(mod & KMOD_ALT)
 				+ 0x1000 * !!(mod & KMOD_SHIFT)
 				+ 0x2000 * !!(mod & KMOD_CTRL)
@@ -297,12 +326,12 @@ int sdlKeyDriver()
 			if (type == SDL_MOUSEMOTION)
 			{
 				int x = sdl_event.motion.xrel, y = -sdl_event.motion.yrel;
-				mem[0x4AF] &= 0x0F;
-				mem[0x4AF] |= 0x10 * (x < 0) + 0x20 * (y < 0);
-				mem[0x4B0] = CLAMP(x, -256, 255);
-				mem[0x4B1] = CLAMP(y, -256, 255);
+				mem[BD_THIS_MOUSE_BUTTONS] &= 0x0F;
+				mem[BD_THIS_MOUSE_BUTTONS] |= 0x10 * (x < 0) + 0x20 * (y < 0);
+				mem[BD_THIS_MOUSE_DX] = CLAMP(x, -256, 255);
+				mem[BD_THIS_MOUSE_DY] = CLAMP(y, -256, 255);
 
-				io_ports[0x64] = 0x21;
+				io_ports[IO_KEYBOARD_CONTROLLER_READ_STATUS] = 0x21;
 				pc_interrupt(0x74);
 			}
 			else if (type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP)
@@ -312,15 +341,15 @@ int sdlKeyDriver()
 					     + 2 * (b == SDL_BUTTON_RIGHT)
 					     + 4 * (b == SDL_BUTTON_MIDDLE);
 
-				mem[0x4AF] &= 0x0F;
+				mem[BD_THIS_MOUSE_BUTTONS] &= 0x0F;
 				if (type == SDL_MOUSEBUTTONDOWN)
-					mem[0x4AF] |= mask;
+					mem[BD_THIS_MOUSE_BUTTONS] |= mask;
 				else
-					mem[0x4AF] &= ~mask;
-				mem[0x4B0] = 0;
-				mem[0x4B1] = 0;
+					mem[BD_THIS_MOUSE_BUTTONS] &= ~mask;
+				mem[BD_THIS_MOUSE_DX] = 0;
+				mem[BD_THIS_MOUSE_DY] = 0;
 
-				io_ports[0x64] = 0x21;
+				io_ports[IO_KEYBOARD_CONTROLLER_READ_STATUS] = 0x21;
 				pc_interrupt(0x74);
 			}
 		}
@@ -654,28 +683,28 @@ int main(int argc, char **argv)
 			OPCODE 20: // MOV r/m, immed
 				R_M_OP(mem[op_from_addr], =, i_data2)
 			OPCODE 21: // IN AL/AX, DX/imm8
-				io_ports[0x20] = 0; // PIC EOI
-				io_ports[0x42] = --io_ports[0x40]; // PIT channel 0/2 read placeholder
-				io_ports[0x3DA] ^= 9; // CGA refresh
+				io_ports[IO_PIC1_INTERRUPT_REQUEST_REGISTER] = 0; // PIC EOI
+				io_ports[IO_PIT_COUNTER_2] = --io_ports[IO_PIT_COUNTER_0]; // PIT channel 0/2 read placeholder
+				io_ports[IO_CGA_STATUS_REGISTER] ^= 9; // CGA refresh
 				scratch_uint = extra ? regs16[REG_DX] : (unsigned char)i_data0;
 #ifndef NO_GRAPHICS
-				scratch_uint == 0x60 && io_ports[0x64] == 0x21 && (io_ports[0x60] = mem[0x4AF + mousePacket], mousePacket = (mousePacket == 2) ? (io_ports[0x64] = 0) : mousePacket + 1); // mouse
+				scratch_uint == IO_KEYBOARD_DATA_PORT && io_ports[IO_KEYBOARD_CONTROLLER_READ_STATUS] == 0x21 && (io_ports[IO_KEYBOARD_DATA_PORT] = mem[BD_THIS_MOUSE_BUTTONS + mousePacket], mousePacket = (mousePacket == 2) ? (io_ports[IO_KEYBOARD_CONTROLLER_READ_STATUS] = 0) : mousePacket + 1); // mouse
 #endif
-				scratch_uint == 0x60 && io_ports[0x64] == 1 && (io_ports[0x64] = 0); // Scancode read flag
-				scratch_uint == 0x3D5 && (io_ports[0x3D4] >> 1 == 7) && (io_ports[0x3D5] = ((mem[0x49E]*80 + mem[0x49D] + CAST(short)mem[0x4AD]) & (io_ports[0x3D4] & 1 ? 0xFF : 0xFF00)) >> (io_ports[0x3D4] & 1 ? 0 : 8)); // CRT cursor position
+				scratch_uint == IO_KEYBOARD_DATA_PORT && io_ports[IO_KEYBOARD_CONTROLLER_READ_STATUS] == 1 && (io_ports[IO_KEYBOARD_CONTROLLER_READ_STATUS] = 0); // Scancode read flag
+				scratch_uint == IO_CGA_CRT_DATA_REGISTER && (io_ports[IO_CGA_CRT_INDEX_REGISTER] >> 1 == 7) && (io_ports[IO_CGA_CRT_DATA_REGISTER] = ((mem[BD_THIS_CRT_CURPOS_Y]*80 + mem[BD_THIS_CRT_CURPOS_X] + CAST(short)mem[BD_VMEM_OFFSET]) & (io_ports[IO_CGA_CRT_INDEX_REGISTER] & 1 ? 0xFF : 0xFF00)) >> (io_ports[IO_CGA_CRT_INDEX_REGISTER] & 1 ? 0 : 8)); // CRT cursor position
 				R_M_OP(regs8[REG_AL], =, io_ports[scratch_uint]);
 			OPCODE 22: // OUT DX/imm8, AL/AX
 				scratch_uint = extra ? regs16[REG_DX] : (unsigned char)i_data0;
 				R_M_OP(io_ports[scratch_uint], =, regs8[REG_AL]);
-				scratch_uint == 0x61 && (io_hi_lo = 0, spkr_en |= regs8[REG_AL] & 3); // Speaker control
-				(scratch_uint == 0x40 || scratch_uint == 0x42) && (io_ports[0x43] & 6) && (mem[0x469 + scratch_uint - (io_hi_lo ^= 1)] = regs8[REG_AL]); // PIT rate programming
+				scratch_uint == IO_KEYBOARD_CONTROLLER_PORT_B && (io_hi_lo = 0, spkr_en |= regs8[REG_AL] & 3); // Speaker control
+				(scratch_uint == IO_PIT_COUNTER_0 || scratch_uint == IO_PIT_COUNTER_2) && (io_ports[IO_PIT_MODE] & 6) && (mem[BD_TIMER0_FREQ + (scratch_uint - IO_PIT_COUNTER_0) + 1 - (io_hi_lo ^= 1)] = regs8[REG_AL]); // PIT rate programming
 #ifndef NO_GRAPHICS
-				scratch_uint == 0x43 && (io_hi_lo = 0, regs8[REG_AL] >> 6 == 2) && (SDL_PauseAudio((regs8[REG_AL] & 0xF7) != 0xB6), 0); // Speaker enable
+				scratch_uint == IO_PIT_MODE && (io_hi_lo = 0, regs8[REG_AL] >> 6 == 2) && (SDL_PauseAudio((regs8[REG_AL] & 0xF7) != 0xB6), 0); // Speaker enable
 #endif
-				scratch_uint == 0x3D5 && (io_ports[0x3D4] >> 1 == 6) && (mem[0x4AD + !(io_ports[0x3D4] & 1)] = regs8[REG_AL]); // CRT video RAM start offset
-				scratch_uint == 0x3D5 && (io_ports[0x3D4] >> 1 == 7) && (scratch2_uint = ((mem[0x49E]*80 + mem[0x49D] + CAST(short)mem[0x4AD]) & (io_ports[0x3D4] & 1 ? 0xFF00 : 0xFF)) + (regs8[REG_AL] << (io_ports[0x3D4] & 1 ? 0 : 8)) - CAST(short)mem[0x4AD], mem[0x49D] = scratch2_uint % 80, mem[0x49E] = scratch2_uint / 80); // CRT cursor position
-				scratch_uint == 0x3B5 && io_ports[0x3B4] == 1 && (GRAPHICS_X = regs8[REG_AL] * 16); // Hercules resolution reprogramming. Defaults are set in the BIOS
-				scratch_uint == 0x3B5 && io_ports[0x3B4] == 6 && (GRAPHICS_Y = regs8[REG_AL] * 4);
+				scratch_uint == IO_CGA_CRT_DATA_REGISTER && (io_ports[IO_CGA_CRT_INDEX_REGISTER] >> 1 == 6) && (mem[BD_VMEM_OFFSET + !(io_ports[IO_CGA_CRT_INDEX_REGISTER] & 1)] = regs8[REG_AL]); // CRT video RAM start offset
+				scratch_uint == IO_CGA_CRT_DATA_REGISTER && (io_ports[IO_CGA_CRT_INDEX_REGISTER] >> 1 == 7) && (scratch2_uint = ((mem[BD_THIS_CRT_CURPOS_Y]*80 + mem[BD_THIS_CRT_CURPOS_X] + CAST(short)mem[BD_VMEM_OFFSET]) & (io_ports[IO_CGA_CRT_INDEX_REGISTER] & 1 ? 0xFF00 : 0xFF)) + (regs8[REG_AL] << (io_ports[IO_CGA_CRT_INDEX_REGISTER] & 1 ? 0 : 8)) - CAST(short)mem[BD_VMEM_OFFSET], mem[BD_THIS_CRT_CURPOS_X] = scratch2_uint % 80, mem[BD_THIS_CRT_CURPOS_Y] = scratch2_uint / 80); // CRT cursor position
+				scratch_uint == IO_MDA_CRT_DATA_REGISTER && io_ports[IO_MDA_CRT_INDEX_REGISTER] == 1 && (GRAPHICS_X = regs8[REG_AL] * 16); // Hercules resolution reprogramming. Defaults are set in the BIOS
+				scratch_uint == IO_MDA_CRT_DATA_REGISTER && io_ports[IO_MDA_CRT_INDEX_REGISTER] == 6 && (GRAPHICS_Y = regs8[REG_AL] * 4);
 			OPCODE 23: // REPxx
 				rep_override_en = 2;
 				rep_mode = i_w;
@@ -791,18 +820,18 @@ int main(int argc, char **argv)
 		if (!(inst_counter % GRAPHICS_UPDATE_DELAY))
 		{
 			// Video card in graphics mode?
-			if (io_ports[0x3B8] & 2)
+			if (io_ports[IO_MDA_CRT_MODE_CONTROL_REGISTER] & 2)
 			{
 				// If we don't already have an SDL window open, set it up and compute color and video memory translation tables
 				if (!sdl_window)
 				{
 					for (int i = 0; i < 16; i++)
-						pixel_colors[i] = mem[0x4AC] ? // CGA?
+						pixel_colors[i] = mem[BD_CGA_VMODE] ? // CGA?
 							cga_colors[(i & 12) >> 2] + (cga_colors[i & 3] << 16) // CGA -> RGB332
 							: 0xFF*(((i & 1) << 24) + ((i & 2) << 15) + ((i & 4) << 6) + ((i & 8) >> 3)); // Hercules -> RGB332
 
 					for (int i = 0; i < GRAPHICS_X * GRAPHICS_Y / 4; i++)
-						vid_addr_lookup[i] = i / GRAPHICS_X * (GRAPHICS_X / 8) + (i / 2) % (GRAPHICS_X / 8) + 0x2000*(mem[0x4AC] ? (2 * i / GRAPHICS_X) % 2 : (4 * i / GRAPHICS_X) % 4);
+						vid_addr_lookup[i] = i / GRAPHICS_X * (GRAPHICS_X / 8) + (i / 2) % (GRAPHICS_X / 8) + 0x2000*(mem[BD_CGA_VMODE] ? (2 * i / GRAPHICS_X) % 2 : (4 * i / GRAPHICS_X) % 4);
 
 					SDL_Init(SDL_INIT_VIDEO);
 					sdl_window = SDL_CreateWindow("8086tiny minus", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, GRAPHICS_X, GRAPHICS_Y, 0);
@@ -812,7 +841,7 @@ int main(int argc, char **argv)
 				}
 
 				// Refresh SDL display from emulated graphics card video RAM
-				vid_mem_base = mem + 0xB0000 + 0x8000*(mem[0x4AC] ? 1 : io_ports[0x3B8] >> 7); // B800:0 for CGA/Hercules bank 2, B000:0 for Hercules bank 1
+				vid_mem_base = mem + 0xB0000 + 0x8000*(mem[BD_CGA_VMODE] ? 1 : io_ports[IO_MDA_CRT_MODE_CONTROL_REGISTER] >> 7); // B800:0 for CGA/Hercules bank 2, B000:0 for Hercules bank 1
 				SDL_LockTexture(sdl_texture, NULL, &rawPixels, &rawPixelsPitch);
 				for (int i = 0; i < GRAPHICS_X * GRAPHICS_Y / 4; i++)
 					rawPixels[i] = pixel_colors[15 & (vid_mem_base[vid_addr_lookup[i]] >> 4 * !(i & 1))];
